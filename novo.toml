@@ -1,0 +1,59 @@
+[package]
+name        = "bcrypt-nv"
+version     = "0.0.1"
+description = "OpenBSD bcrypt: the Eksblowfish key schedule as a @value state, the 2/2a/2x/2y/2b variants with what each one records, the 72-byte limit and the embedded NUL as CHECKED REFUSALS rather than silent truncations, the cost as a validated value, and the sixty-character modular-crypt string both ways over bcrypt's own base64 alphabet.  The salt arrives as a parameter, so nothing here reads randomness.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  Hashing a password needs a salt, and generating a salt is
+# `[rand]` — which this layer's budget does not admit.  So the salt
+# arrives as a PARAMETER, the same shape jwt-nv takes for its clock,
+# and hashing becomes a pure function of its three inputs.  Every
+# public function's effect row is `[]`, and not one of them wanted to
+# widen.
+#
+# It carries NO `tests/embedded_probe.nv` and makes no device claim.
+# The arithmetic is device-shaped — integer lookups and additions over
+# a `@value` state with nothing allocated — but the state is 4 KiB of
+# S-boxes that every step copies, and a Cortex-M4 frame is not where
+# that belongs.  A firmware author who needs a password hash wants a
+# memory-light KDF; pbkdf2-nv is that.
+layer       = "core"
+
+category    = "crypto"
+
+tags = ["bcrypt", "blowfish", "eksblowfish", "password", "password-hashing", "modular-crypt", "kdf", "openbsd", "sans-io"]
+repository  = "https://github.com/novolang/bcrypt-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.9.0"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "A password hash whose cost is a number you choose"
+
+[dependencies]
+# NONE, and that is a decision rather than an accident.
+#
+# NOT crypto-nv.  bcrypt uses no hash function at all — the whole
+# algorithm is Blowfish — so the only thing this package would want
+# from it is `digest.ct_eq`, the constant-time comparison a stored
+# hash must be checked with.  Depending on it for that one function
+# would put SHA-2, SHA-1, MD5 and HMAC into the footprint of a caller
+# who wanted a password hash and nothing else.  The README says where
+# the comparison lives, and `bcrypthash.verify` does the comparison
+# itself so that the ordinary caller never has to.
+#
+# NOT base64-nv.  bcrypt's alphabet is NOT RFC 4648's — it is the same
+# 64 characters in a different order — so a standard base64 encoder
+# produces sixty plausible characters that verify against nothing.
+# The alphabet is eight lines and it is `bcryptmcf`'s.
+#
+# NOT rand-nv.  See the `layer` comment: the salt is the caller's.

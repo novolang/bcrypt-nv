@@ -1,0 +1,203 @@
+// tests/bcrypt_vectors_tests.nv — the published hashes, and the two
+// refusals that make this package different from every other bcrypt.
+//
+// They COMPILE today and they FAIL at run, with `not implemented:
+// bcrypt-nv.<module>.<fn>` from the `todo()` that is each body.  That
+// is the expected state of an interface release: the compiler has
+// checked every signature, every type and every effect row, and
+// nothing else has been checked because there is nothing else yet.
+//
+// WHERE THE VECTORS COME FROM.  The `$2a$` hashes below are from
+// jBCrypt's `BCryptTest`, which is the set the Rust `bcrypt` crate,
+// Python's `bcrypt` and Go's `golang.org/x/crypto/bcrypt` all check
+// themselves against, and which in turn comes from OpenWall's
+// published bcrypt test data.  A hash that matches here is a hash
+// OpenBSD's own `crypt` produces.
+
+use std.test
+use std.bytes
+use bcryptcost
+use bcrypthash
+use bcryptinput
+use bcryptmcf
+use bcryptvariant
+
+// A password value.  Every vector below starts here, and the helper
+// keeps the assertions about bcrypt rather than about unwrapping.
+// The `Err` arm is unreachable for every literal in this file; it
+// builds an empty password so that the helper has a total type.
+fn pw(text: Str) -> BcryptPassword
+    match bcryptinput.password(bytes.from_str(text))
+        Ok(p)  => p
+        Err(_) => BcryptPassword { text: bytes.zeros(0) }
+
+// A sixteen-byte salt, the same way.
+fn salt16() -> BcryptSalt
+    match bcryptinput.salt(bytes.zeros(16))
+        Ok(s)  => s
+        Err(_) => BcryptSalt { raw: bytes.zeros(16) }
+
+@test
+fn test_the_published_hashes_verify() [io]
+    // jBCrypt's BCryptTest, entries 1, 4 and 7: the empty password,
+    // "a" and "abc", each at cost 6 with the salt the string carries.
+    test.case("the empty password at cost 6")
+    match bcrypthash.verify(pw(""),
+        "\$2a\$06\$DCq7YPn5Rq63x1Lad4cll.TV4S6ytwfsfvkgY8jIucDrjc8deX1s.")
+        Ok(ok) => test.assert(ok)
+        Err(e) => test.fail(e.message())
+
+    test.case("\"a\" at cost 6")
+    match bcrypthash.verify(pw("a"),
+        "\$2a\$06\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+        Ok(ok) => test.assert(ok)
+        Err(e) => test.fail(e.message())
+
+    test.case("\"abc\" at cost 6")
+    match bcrypthash.verify(pw("abc"),
+        "\$2a\$06\$If6bvum7DFjUnE9p2uDeDu0YHzrHM6tf.iqN8.yx.jNN1ILEf7h0i")
+        Ok(ok) => test.assert(ok)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_the_wrong_password_answers_false_and_not_an_error() [io]
+    // A wrong password is a user event; a string that is not a hash is
+    // a data fault.  A login endpoint has to tell them apart, so they
+    // are different values here.
+    test.case("a wrong password is Ok(false)")
+    match bcrypthash.verify(pw("not the password"),
+        "\$2a\$06\$If6bvum7DFjUnE9p2uDeDu0YHzrHM6tf.iqN8.yx.jNN1ILEf7h0i")
+        Ok(ok) => test.assert(not ok)
+        Err(e) => test.fail(e.message())
+
+    test.case("a string that is not a bcrypt hash is Err")
+    match bcrypthash.verify(pw("x"), "hunter2")
+        Ok(_)  => test.fail("a row that is not a hash is not a wrong password")
+        Err(e) => test.assert(bcrypterr.is_format_fault(e))
+
+@test
+fn test_a_password_over_seventy_two_bytes_is_refused_not_truncated() [io]
+    // THE decision this package makes differently from every other
+    // bcrypt.  Byte 73 changes nothing about the hash, so two
+    // passwords sharing their first 72 bytes are one password
+    // everywhere else, and nobody is told.
+    let long = bytes.from_str(str.repeat("a", 73))
+
+    test.case("73 bytes is BcryptPasswordTooLong, with both numbers")
+    match bcryptinput.password(long)
+        Ok(_)  => test.fail("73 bytes is over the limit the schedule reads")
+        Err(e) =>
+            test.assert_eq_str(bcrypterr.code(e), "password-too-long")
+            test.assert(bcrypterr.is_input_fault(e))
+            test.assert(not bcrypterr.is_format_fault(e))
+            test.assert_eq(bcrypterr.format_offset(e), -1)
+
+    test.case("exactly 72 bytes is accepted")
+    match bcryptinput.password(bytes.from_str(str.repeat("a", 72)))
+        Ok(p)  => test.assert_eq(bcryptinput.password_len(p), 72)
+        Err(e) => test.fail(e.message())
+
+    test.case("and the classic behaviour is available under a name that shows")
+    match bcryptinput.password_truncating(long)
+        Ok(p)  => test.assert_eq(bcryptinput.password_len(p), 72)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_a_password_with_a_zero_byte_is_refused() [io]
+    // The C implementations stop at the NUL, so "abc\0def" hashes
+    // there as "abc".  A password this package accepted and hashed
+    // differently would be one nobody could log in with elsewhere.
+    let withnul = bytes.from_byte_list([0x61, 0x62, 0x63, 0x00, 0x64])
+
+    test.case("a NUL anywhere is BcryptPasswordHasNul, with its offset")
+    match bcryptinput.password(withnul)
+        Ok(_)  => test.fail("a NUL makes this password ambiguous")
+        Err(e) => test.assert_eq_str(bcrypterr.code(e), "password-has-nul")
+
+    test.case("and password_truncating refuses it too")
+    match bcryptinput.password_truncating(withnul)
+        Ok(_)  => test.fail("truncating at 72 is a different decision from truncating at a NUL")
+        Err(e) => test.assert(bcrypterr.is_input_fault(e))
+
+@test
+fn test_the_salt_is_a_parameter_and_its_length_is_fixed() [io]
+    // Nothing in this package reads randomness.  The salt is sixteen
+    // bytes the caller produced, and hashing is a pure function of
+    // the password, the salt and the cost.
+    test.case("sixteen bytes is a salt")
+    match bcryptinput.salt(bytes.zeros(16))
+        Ok(s)  => test.assert_eq(bytes.len(bcryptinput.salt_bytes(s)), 16)
+        Err(e) => test.fail(e.message())
+
+    test.case("eight bytes is not, and the refusal names both numbers")
+    match bcryptinput.salt(bytes.zeros(8))
+        Ok(_)  => test.fail("bcrypt's salt length is the algorithm's, not the caller's")
+        Err(e) => test.assert_eq_str(bcrypterr.code(e), "salt-wrong-length")
+
+    test.case("twenty-four bytes is not either — it is not trimmed")
+    match bcryptinput.salt(bytes.zeros(24))
+        Ok(_)  => test.fail("a trimmed salt produces a hash nothing else reproduces")
+        Err(e) => test.assert(bcrypterr.is_input_fault(e))
+
+@test
+fn test_hashing_is_a_pure_function_of_its_three_inputs() [io]
+    match bcryptinput.salt(bytes.zeros(16))
+        Err(e) => test.fail(e.message())
+        Ok(sa) =>
+            test.case("the same password, salt and cost give the same hash twice")
+            match bcrypthash.hash_text(pw("correct horse"), sa, bcryptcost.default_cost())
+                Err(e) => test.fail(e.message())
+                Ok(a)  =>
+                    match bcrypthash.hash_text(pw("correct horse"), sa,
+                                               bcryptcost.default_cost())
+                        Err(e) => test.fail(e.message())
+                        Ok(b)  => test.assert_eq_str(a, b)
+
+            test.case("and the stored string is sixty characters that start with \$2b\$")
+            match bcrypthash.hash_text(pw("x"), sa, bcryptcost.default_cost())
+                Err(e) => test.fail(e.message())
+                Ok(s)  =>
+                    test.assert_eq(str.len(s), bcryptmcf.BCRYPT_MCF_CHARS)
+                    test.assert(str.starts_with(s, "\$2b\$12\$"))
+
+@test
+fn test_the_raw_hash_is_twenty_four_bytes_and_the_stored_one_is_twenty_three() [io]
+    // The accident that became part of the format.  A verifier that
+    // kept all 24 would disagree with every stored hash in the world.
+    match bcryptinput.salt(bytes.zeros(16))
+        Err(e) => test.fail(e.message())
+        Ok(sa) =>
+            test.case("the encryption produces 24 bytes")
+            test.assert_eq(bytes.len(bcrypthash.raw_hash(pw("x"), sa,
+                               bcryptcost.default_cost())),
+                           bcrypthash.BCRYPT_RAW_HASH_BYTES)
+
+            test.case("and the stored field carries 23 of them")
+            test.assert_eq(bcryptmcf.BCRYPT_STORED_HASH_BYTES, 23)
+            test.assert_eq(bcryptmcf.BCRYPT_HASH_CHARS, 31)
+
+    test.case("the magic string is three Blowfish blocks")
+    test.assert_eq(str.len(bcrypthash.BCRYPT_MAGIC), 24)
+    test.assert_eq(bcrypthash.BCRYPT_MAGIC_ROUNDS, 64)
+
+@test
+fn test_only_one_variant_is_written_and_every_one_is_verified() [io]
+    test.case("2b is what a new hash says")
+    test.assert_eq_str(bcryptvariant.prefix_text(bcryptvariant.written_variant()), "2b")
+    test.assert(bcryptvariant.is_writable(Bcrypt2b))
+    test.assert(not bcryptvariant.is_writable(Bcrypt2x))
+    test.assert(not bcryptvariant.is_writable(Bcrypt2a))
+
+    test.case("asking for 2x is refused rather than quietly written as 2b")
+    match bcryptinput.salt(bytes.zeros(16))
+        Err(e) => test.fail(e.message())
+        Ok(sa) =>
+            match bcrypthash.hash_as(Bcrypt2x, pw("x"), sa, bcryptcost.default_cost())
+                Ok(_)  => test.fail("2x records somebody else's bug")
+                Err(e) => test.assert_eq_str(bcrypterr.code(e), "unknown-variant")
+
+    test.case("2a, 2y and 2b compute alike; 2x does not")
+    test.assert(bcryptvariant.computes_alike(Bcrypt2a, Bcrypt2b))
+    test.assert(bcryptvariant.computes_alike(Bcrypt2y, Bcrypt2b))
+    test.assert(not bcryptvariant.computes_alike(Bcrypt2x, Bcrypt2b))
+    test.assert(not bcryptvariant.computes_alike(Bcrypt2, Bcrypt2b))

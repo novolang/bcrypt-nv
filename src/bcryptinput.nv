@@ -1,0 +1,145 @@
+// bcryptinput — the password and the salt as values that have already
+// been checked.
+//
+// WHY THE CHECKS ARE TYPES.  bcrypt has two inputs a caller can get
+// wrong and one the caller cannot: the password may be too long or
+// contain a zero byte, the salt may be the wrong length, and the
+// cost is `bcryptcost`'s.  Every other implementation checks those
+// at the moment it hashes, or does not check them at all, and the
+// Eksblowfish schedule underneath ends up with an error channel for
+// mistakes that were made three calls earlier.
+//
+// Here the checking happens once, in a constructor, and
+// `bcryptblowfish.eks_setup` takes three already-checked values and
+// CANNOT FAIL.  A reader of that function sees no error path because
+// there is none, and a caller sees the refusal at the line where the
+// bad value came in.
+//
+// THE 72-BYTE RULE IS THE ONE THAT MATTERS.  The Blowfish key schedule
+// XORs the key over an 18-word P-array, which is 72 bytes, and stops.
+// Byte 73 of a password changes nothing about the hash.  Every bcrypt
+// in the world truncates silently, so two passwords that share their
+// first 72 bytes are one password there and nobody is told — which is
+// how a password manager's 100-character passphrase quietly becomes a
+// 72-character one.  `password` refuses instead, and
+// `password_truncating` is the one call that does what everybody else
+// does, under a name a reviewer sees.
+
+// A password the key schedule can read: at most 72 bytes, with no zero
+// byte in it.
+//
+// A plain struct rather than a `@value` one because it is a `Result`
+// payload and a `@value` struct cannot be one (E2015).
+//
+// ```novo
+// use std.bytes
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("correct horse"))
+//         Ok(p)  => println("${bcryptinput.password_len(p)}")   // 13
+//         Err(e) => println(e.message())
+// ```
+pub struct BcryptPassword
+    // The bytes, as they will be fed to the schedule.
+    text: Bytes
+
+// Sixteen bytes of salt.
+//
+// A plain struct, for the same reason.  The length is fixed by the
+// algorithm rather than chosen by the caller: the salt is one 128-bit
+// value fed to the key schedule.
+//
+// ```novo
+// use std.bytes
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.salt(bytes.zeros(16))
+//         Ok(s)  => println("${bytes.len(bcryptinput.salt_bytes(s))}")   // 16
+//         Err(e) => println(e.message())
+// ```
+pub struct BcryptSalt
+    // The sixteen bytes.
+    raw: Bytes
+
+// A password, or the refusal that says why those bytes are not one.
+//
+// `BcryptPasswordTooLong` above 72 bytes, `BcryptPasswordHasNul` for a
+// zero byte at any offset.  The second refusal is not pedantry: the C
+// implementations treat the password as a NUL-terminated string, so
+// `"abc\0def"` hashes there as `"abc"`, and a password this package
+// accepted and hashed differently would be one nobody could log in
+// with anywhere else.
+//
+// ```novo
+// use std.bytes
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.zeros(100))
+//         Ok(_)  => println("this cannot happen: 100 bytes is over the limit")
+//         Err(e) => println(bcrypterr.code(e))   // password-has-nul
+// ```
+pub fn password(text: Bytes) -> Result<BcryptPassword, BcryptError> []
+    todo("bcrypt-nv.bcryptinput.password")
+
+// A password from the first 72 bytes of whatever it was given, which
+// is what every other bcrypt does silently.
+//
+// The escape hatch, named so that a reviewer sees it and a `grep`
+// finds every place a program has decided to behave like the C
+// implementations.  Still refuses a zero byte, because truncating at
+// 72 and truncating at a NUL are different decisions and only the
+// first one is being asked for here.
+//
+// ```novo
+// use std.bytes
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password_truncating(bytes.from_str("a"))
+//         Ok(p)  => println("${bcryptinput.password_len(p)}")   // 1
+//         Err(e) => println(e.message())
+// ```
+pub fn password_truncating(text: Bytes) -> Result<BcryptPassword, BcryptError> []
+    todo("bcrypt-nv.bcryptinput.password_truncating")
+
+// How many bytes of password the schedule will read.
+//
+// At most 72, and exactly what was handed in when it was shorter.
+pub fn password_len(p: BcryptPassword) -> Int []
+    todo("bcrypt-nv.bcryptinput.password_len")
+
+// The password's bytes.
+//
+// Here so that a caller can hand the same value to something else —
+// a re-hash at a higher cost, a second variant — without holding the
+// original string as well.
+pub fn password_bytes(p: BcryptPassword) -> Bytes []
+    todo("bcrypt-nv.bcryptinput.password_bytes")
+
+// A salt, or the refusal naming the length that was given.
+//
+// Exactly `BCRYPT_SALT_BYTES`.  A shorter one is not padded and a
+// longer one is not trimmed, because either would produce a hash that
+// no other implementation reproduces from the same stored string.
+//
+// ```novo
+// use std.bytes
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.salt(bytes.zeros(8))
+//         Ok(_)  => println("this cannot happen: 8 is not 16")
+//         Err(e) => println(bcrypterr.code(e))   // salt-wrong-length
+// ```
+pub fn salt(raw: Bytes) -> Result<BcryptSalt, BcryptError> []
+    todo("bcrypt-nv.bcryptinput.salt")
+
+// The salt's sixteen bytes.
+//
+// What a caller writes into a modular-crypt string, and what a caller
+// that is re-hashing at a higher cost keeps.
+pub fn salt_bytes(s: BcryptSalt) -> Bytes []
+    todo("bcrypt-nv.bcryptinput.salt_bytes")

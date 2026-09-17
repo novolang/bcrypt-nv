@@ -1,0 +1,195 @@
+// bcryptmcf — the sixty characters a bcrypt hash is stored as, and the
+// alphabet nobody expects.
+//
+// THE STRING.  A bcrypt hash is written in the modular crypt format:
+//
+//     $2b$12$LongSaltTwentyTwoChars.ThirtyOneCharactersOfHashHere..
+//     ^^^^ ^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     |    |  22 characters of salt, then 31 of hash
+//     |    the cost, always two digits
+//     the variant, between two dollar signs
+//
+// Sixty characters, every one of them fixed-width.  There is no
+// separator between the salt and the hash, which is why a parser that
+// splits on `$` and then guesses is a parser that reads the wrong
+// bytes on the first unusual input.
+//
+// THE ALPHABET IS NOT BASE64.  bcrypt's encoding uses
+// `./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789`,
+// where standard base64 (RFC 4648) uses
+// `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/`.
+// The two are the same 64 characters in a different order, so a hash
+// encoded with the wrong one is 60 plausible characters that verify
+// against nothing.  This is the single thing a from-scratch bcrypt
+// gets wrong, and it is why the alphabet is published here as a
+// constant rather than being spelled inside a function.
+//
+// TWENTY-THREE BYTES, NOT TWENTY-FOUR.  The hash is the 24-byte
+// ciphertext of a 24-byte magic string, and the stored field is 31
+// characters, which carries 23 bytes.  The last byte is DROPPED.  That
+// was an accident in the original implementation and it is now part of
+// the format: a verifier that kept all 24 would disagree with every
+// stored hash in the world.  `bcrypthash` is where the 24 becomes 23.
+
+// The characters bcrypt's own base64 uses, in order.
+//
+// Not RFC 4648's.  See the note at the top of this module.
+pub const BCRYPT_B64_ALPHABET = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// Characters a sixteen-byte salt occupies: 22.
+pub const BCRYPT_SALT_CHARS = 22
+
+// Characters the stored hash occupies: 31.
+pub const BCRYPT_HASH_CHARS = 31
+
+// Bytes the stored hash carries: 23, out of the 24 that were
+// computed.
+pub const BCRYPT_STORED_HASH_BYTES = 23
+
+// Characters a whole modular-crypt string occupies, for every variant
+// whose prefix is two characters: 60.
+pub const BCRYPT_MCF_CHARS = 60
+
+// A parsed modular-crypt string: the four fields, as values.
+//
+// A plain struct rather than a `@value` one because it is a `Result`
+// payload and a `@value` struct cannot be one (E2015).
+//
+// ```novo
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptmcf.parse("$2b$12$" + str.repeat(".", 53))
+//         Ok(h)  => println(bcryptvariant.prefix_text(bcryptmcf.variant_of(h)))
+//         Err(e) => println(e.message())
+// ```
+pub struct BcryptHash
+    // Which implementation's behaviour the hash records.
+    variant: BcryptVariant
+    // How many times the key schedule was run, as `2^cost`.
+    cost: BcryptCost
+    // The sixteen salt bytes, decoded.
+    salt: BcryptSalt
+    // The twenty-three stored hash bytes, decoded.
+    digest: Bytes
+
+// Encode bytes in bcrypt's alphabet.
+//
+// No padding is written and none is expected: the two fields are
+// fixed-width, so there is nothing to pad to.
+//
+// ```novo
+// use std.bytes
+// use bcryptmcf
+//
+// fn main() [io]
+//     println(bcryptmcf.b64_encode(bytes.zeros(16)))
+//     // .................... — 22 characters, all the first alphabet letter
+// ```
+pub fn b64_encode(raw: Bytes) -> Str []
+    todo("bcrypt-nv.bcryptmcf.b64_encode")
+
+// Decode bcrypt's alphabet, or refuse naming the character and the
+// offset.
+//
+// A character that is not in the alphabet is `BcryptBadBase64`.  A `+`
+// or a `/` is exactly that case, and it is what a caller who used a
+// standard base64 encoder produces, so the refusal names the character
+// rather than saying "invalid".
+//
+// ```novo
+// use std.bytes
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptmcf.b64_decode("++++")
+//         Ok(_)  => println("this cannot happen: + is not in the alphabet")
+//         Err(e) => println(bcrypterr.code(e))   // bad-base64
+// ```
+pub fn b64_decode(text: Str) -> Result<Bytes, BcryptError> []
+    todo("bcrypt-nv.bcryptmcf.b64_decode")
+
+// How many characters `n` bytes encode to in this alphabet.
+//
+// Four characters per three bytes, rounded up, with no padding: 16
+// bytes is 22 characters and 23 bytes is 31.
+//
+// ```novo
+// use bcryptmcf
+//
+// fn main() [io]
+//     println("${bcryptmcf.b64_chars_for(16)}")   // 22
+// ```
+pub fn b64_chars_for(n: Int) -> Int []
+    todo("bcrypt-nv.bcryptmcf.b64_chars_for")
+
+// Parse a stored string into its four fields.
+//
+// Every refusal names the field it stopped in and the offset it
+// stopped at, so a row that will not parse can be found in a database
+// rather than merely rejected.  A string of the wrong length is
+// refused before anything is decoded.
+//
+// ```novo
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptmcf.parse("not a hash")
+//         Ok(_)  => println("this cannot happen")
+//         Err(e) => println("${bcrypterr.format_offset(e)}")   // 0
+// ```
+pub fn parse(text: Str) -> Result<BcryptHash, BcryptError> []
+    todo("bcrypt-nv.bcryptmcf.parse")
+
+// Render a parsed hash back to its sixty characters.
+//
+// `parse` then `render` gives back exactly the string that went in,
+// for every string `parse` accepted.  That round trip is what a test
+// asserts and what a migration relies on.
+//
+// ```novo
+// use bcryptmcf
+//
+// fn main() [io]
+//     let stored = "$2b$12$" + str.repeat(".", 53)
+//     match bcryptmcf.parse(stored)
+//         Ok(h)  => println("${bcryptmcf.render(h) == stored}")   // true
+//         Err(e) => println(e.message())
+// ```
+pub fn render(h: BcryptHash) -> Str []
+    todo("bcrypt-nv.bcryptmcf.render")
+
+// The variant a parsed hash carries.
+pub fn variant_of(h: BcryptHash) -> BcryptVariant []
+    todo("bcrypt-nv.bcryptmcf.variant_of")
+
+// The cost a parsed hash carries.
+//
+// What a deployment raising its cost compares against its own floor,
+// so that it can re-hash on the next successful login.
+pub fn cost_of(h: BcryptHash) -> BcryptCost []
+    todo("bcrypt-nv.bcryptmcf.cost_of")
+
+// The salt a parsed hash carries.
+//
+// Verifying a password means hashing it with THIS salt, which is why
+// the salt is stored in the string beside the hash and why it comes
+// back out as the checked value the schedule takes.
+pub fn salt_of(h: BcryptHash) -> BcryptSalt []
+    todo("bcrypt-nv.bcryptmcf.salt_of")
+
+// The twenty-three stored hash bytes.
+//
+// Compare these with `digest.ct_eq` from crypto-nv, never with `==`.
+// `bcrypthash.verify` already does; this accessor is for a caller
+// doing something else with them.
+pub fn digest_of(h: BcryptHash) -> Bytes []
+    todo("bcrypt-nv.bcryptmcf.digest_of")
+
+// A hash value from its four fields, without parsing a string.
+//
+// What `bcrypthash.hash` builds before rendering, and what a test
+// builds to check `render` against a known string.
+pub fn hash_value(v: BcryptVariant, c: BcryptCost, s: BcryptSalt,
+                  digest: Bytes) -> Result<BcryptHash, BcryptError> []
+    todo("bcrypt-nv.bcryptmcf.hash_value")

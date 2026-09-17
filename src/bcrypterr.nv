@@ -1,0 +1,136 @@
+// bcrypterr — the refusals, and the two questions a program asks about
+// one.
+//
+// Almost every other bcrypt in the world has exactly one failure mode,
+// "that string is not a bcrypt hash", and silently accepts everything
+// else — including a password longer than the algorithm can read.  This
+// package refuses four more things than that, and the refusals are the
+// package's whole safety argument, so they are a type with arms rather
+// than a boolean.
+//
+// THE TWO QUESTIONS.  A caller that gets a refusal is asking one of
+// two things.  "Did I hand this function something it cannot work
+// with" — a password too long, a cost out of range, a salt of the
+// wrong size — is a fault in the CALL, and the fix is in the caller's
+// code.  "Is this stored string a bcrypt hash at all" is a fault in
+// the DATA, and the fix is in the database or in whatever wrote it.
+// `is_input_fault` and `is_format_fault` divide them, because a
+// deployment that logs the two together cannot tell a bug from a bad
+// row.
+
+// What a call in this package refuses with.
+//
+// Every arm carries the numbers or the field a message needs, so a
+// report says what was wrong rather than "invalid".
+pub enum BcryptError
+    // The password is longer than bcrypt can read.  The Blowfish key
+    // schedule takes at most 72 bytes, and every other implementation
+    // silently uses the first 72 — so two passwords sharing their
+    // first 72 bytes are one password, and nobody is told.  Here it is
+    // a refusal; see `bcrypthash` for what a caller who wants the
+    // classic behaviour does.
+    BcryptPasswordTooLong(len: Int, limit: Int)
+    // The password contains a zero byte.  The C implementations treat
+    // the password as a NUL-terminated string, so `"abc\0def"` and
+    // `"abc"` hash to the same value there.  A password this package
+    // accepted and hashed differently from every other implementation
+    // would be a password nobody could log in with anywhere else.
+    BcryptPasswordHasNul(at: Int)
+    // The cost is outside 4 to 31.  Below 4 the key schedule is not
+    // run enough times to be worth anything; above 31 the round count
+    // `2^cost` does not fit the arithmetic the algorithm is defined
+    // over.
+    BcryptCostOutOfRange(cost: Int, lo: Int, hi: Int)
+    // The salt is not 16 bytes.  bcrypt's salt length is fixed by the
+    // algorithm, not chosen by the caller: it is one 128-bit block fed
+    // to the key schedule.
+    BcryptSaltWrongLength(len: Int, want: Int)
+    // The modular-crypt string is not a bcrypt hash.  `what` names the
+    // field the parse stopped in — `"prefix"`, `"cost"`, `"salt"`,
+    // `"hash"` — and `at` is the offset from the first character, so
+    // two tools reading the same row name the same place.
+    BcryptMalformed(at: Int, what: Str)
+    // The variant prefix is one this package does not write.  `found`
+    // is the text between the two dollar signs, so a log can show
+    // `"2z"` rather than "unsupported".
+    BcryptUnknownVariant(found: Str)
+    // A character that is not in bcrypt's own base64 alphabet appeared
+    // where an encoded salt or hash was expected.  `at` is the offset
+    // and `found` is the character.
+    BcryptBadBase64(at: Int, found: Str)
+
+// message renders the refusal as one line of prose, with the numbers
+// in it.
+//
+// `Result<_, BcryptError>` requires this impl: SPEC § 3.4 admits a
+// `Result` error type only if it implements `Error`.
+impl Error for BcryptError
+    // Answer the one-line report: what was refused, and with which
+    // numbers.
+    //
+    // ```novo
+    // use bcrypterr
+    //
+    // fn main() [io]
+    //     let e = BcryptPasswordTooLong(len: 100, limit: 72)
+    //     println(e.message())
+    //     // bcrypt: the password is 100 bytes and bcrypt reads 72
+    // ```
+    fn message(self) -> Str
+        todo("bcrypt-nv.bcrypterr.BcryptError.message")
+
+// Whether the refusal is about what the caller handed in.
+//
+// True for `BcryptPasswordTooLong`, `BcryptPasswordHasNul`,
+// `BcryptCostOutOfRange` and `BcryptSaltWrongLength`.  The fix is in
+// the calling code, and a deployment seeing one of these has a bug
+// rather than a bad row.
+//
+// ```novo
+// use bcrypterr
+//
+// fn main() [io]
+//     let e = BcryptSaltWrongLength(len: 8, want: 16)
+//     println("${bcrypterr.is_input_fault(e)}")   // true
+// ```
+pub fn is_input_fault(e: BcryptError) -> Bool []
+    todo("bcrypt-nv.bcrypterr.is_input_fault")
+
+// Whether the refusal is about a stored string that is not a bcrypt
+// hash.
+//
+// True for `BcryptMalformed`, `BcryptUnknownVariant` and
+// `BcryptBadBase64`.  The fix is in the data, or in whatever wrote it.
+//
+// ```novo
+// use bcrypterr
+//
+// fn main() [io]
+//     let e = BcryptUnknownVariant(found: "2z")
+//     println("${bcrypterr.is_format_fault(e)}")   // true
+// ```
+pub fn is_format_fault(e: BcryptError) -> Bool []
+    todo("bcrypt-nv.bcrypterr.is_format_fault")
+
+// Where in a stored string the refusal was found, or -1 when the
+// refusal is not about a stored string.
+//
+// `BcryptMalformed` and `BcryptBadBase64` carry an offset; the others
+// answer -1, which is a value a caller can print and not an offset it
+// could use by mistake.
+pub fn format_offset(e: BcryptError) -> Int []
+    todo("bcrypt-nv.bcrypterr.format_offset")
+
+// The refusal as a short stable token, for a log that is grepped
+// rather than read: `"password-too-long"`, `"password-has-nul"`,
+// `"cost-out-of-range"`, `"salt-wrong-length"`, `"malformed"`,
+// `"unknown-variant"`, `"bad-base64"`.
+//
+// ```novo
+// use bcrypterr
+//
+// fn main() [io]
+//     println(bcrypterr.code(BcryptPasswordHasNul(at: 3)))   // password-has-nul
+// ```
+pub fn code(e: BcryptError) -> Str []
+    todo("bcrypt-nv.bcrypterr.code")

@@ -1,0 +1,195 @@
+// tests/bcrypt_format_tests.nv — the cost as a value, and the sixty
+// characters a hash is stored as.
+//
+// RED ON PURPOSE, like every suite here: each assertion reaches
+// `not implemented: bcrypt-nv.<module>.<fn>`.
+//
+// The alphabet and the field widths are OpenBSD's, and the ones every
+// implementation that reads the format follows.  A test that fails
+// here names the field it disagrees about.
+
+use std.test
+use std.bytes
+use bcryptcost
+use bcryptmcf
+use bcryptvariant
+
+// A stored string whose fields are all the alphabet's first character,
+// so that the field widths are what is being asserted and not the
+// contents.  Twenty-two characters of salt and thirty-one of hash.
+fn flat_hash() -> Str
+    "\$2b\$12\$" + str.repeat(".", 53)
+
+@test
+fn test_the_cost_range_is_openbsds_own() [io]
+    test.case("four to thirty-one")
+    test.assert_eq(bcryptcost.BCRYPT_COST_MIN, 4)
+    test.assert_eq(bcryptcost.BCRYPT_COST_MAX, 31)
+    test.assert_eq(bcryptcost.BCRYPT_COST_DEFAULT, 12)
+
+    test.case("a cost below the minimum is refused, naming both bounds")
+    match bcryptcost.cost(3)
+        Ok(_)  => test.fail("3 is below what bcrypt admits")
+        Err(e) =>
+            test.assert_eq_str(bcrypterr.code(e), "cost-out-of-range")
+            test.assert(bcrypterr.is_input_fault(e))
+
+    test.case("and one above the maximum")
+    match bcryptcost.cost(32)
+        Ok(_)  => test.fail("2^32 rounds is past the arithmetic")
+        Err(e) => test.assert(bcrypterr.is_input_fault(e))
+
+    test.case("the bounds themselves are admitted")
+    match bcryptcost.cost(4)
+        Ok(c)  => test.assert_eq(bcryptcost.value_of(c), 4)
+        Err(e) => test.fail(e.message())
+    match bcryptcost.cost(31)
+        Ok(c)  => test.assert_eq(bcryptcost.value_of(c), 31)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_the_cost_is_an_exponent_and_each_step_doubles_the_work() [io]
+    test.case("cost 12 is 4096 runs of the key schedule")
+    test.assert_eq(bcryptcost.rounds_of(bcryptcost.default_cost()), 4096)
+
+    test.case("cost 13 is twice that")
+    match bcryptcost.cost(13)
+        Ok(c)  => test.assert_eq(bcryptcost.rounds_of(c), 8192)
+        Err(e) => test.fail(e.message())
+
+    test.case("and cost 4, the minimum, is sixteen")
+    match bcryptcost.cost(4)
+        Ok(c)  => test.assert_eq(bcryptcost.rounds_of(c), 16)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_the_cost_field_is_two_digits_and_always_two() [io]
+    test.case("twelve is written 12")
+    test.assert_eq_str(bcryptcost.cost_text(bcryptcost.default_cost()), "12")
+
+    test.case("four is written 04, zero-padded")
+    match bcryptcost.cost(4)
+        Ok(c)  => test.assert_eq_str(bcryptcost.cost_text(c), "04")
+        Err(e) => test.fail(e.message())
+
+    test.case("and a single digit does not parse, because the field is fixed-width")
+    match bcryptcost.cost_of_text("4")
+        Ok(_)  => test.fail("a one-digit cost would eat the first salt character")
+        Err(e) => test.assert(bcrypterr.is_format_fault(e))
+
+    test.case("two digits round-trip")
+    match bcryptcost.cost_of_text("06")
+        Ok(c)  => test.assert_eq(bcryptcost.rounds_of(c), 64)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_a_cost_is_compared_against_a_floor_so_a_login_can_rehash() [io]
+    // The only moment a stored hash's cost can be raised is the one
+    // where the password is in hand: after a successful verify.
+    match bcryptcost.cost(10)
+        Err(e)  => test.fail(e.message())
+        Ok(old) =>
+            test.case("a cost of 10 is below a floor of 12")
+            test.assert(not bcryptcost.at_least(old, bcryptcost.default_cost()))
+
+            test.case("and a floor equal to the cost is met")
+            test.assert(bcryptcost.at_least(old, old))
+
+@test
+fn test_the_alphabet_is_not_rfc_4648s() [io]
+    // The single thing a from-scratch bcrypt gets wrong: the same
+    // sixty-four characters in a different order, so a hash encoded
+    // with a standard base64 encoder is sixty plausible characters
+    // that verify against nothing.
+    test.case("it begins with . and / and not with A")
+    test.assert(str.starts_with(bcryptmcf.BCRYPT_B64_ALPHABET, "./AB"))
+    test.assert_eq(str.len(bcryptmcf.BCRYPT_B64_ALPHABET), 64)
+
+    test.case("it ends with digits, where RFC 4648 ends with + and /")
+    test.assert(str.ends_with(bcryptmcf.BCRYPT_B64_ALPHABET, "0123456789"))
+
+    test.case("so a + or a / is refused, naming the character and the offset")
+    match bcryptmcf.b64_decode("++++")
+        Ok(_)  => test.fail("+ is what a standard base64 encoder writes")
+        Err(e) =>
+            test.assert_eq_str(bcrypterr.code(e), "bad-base64")
+            test.assert_eq(bcrypterr.format_offset(e), 0)
+
+@test
+fn test_the_two_encoded_fields_are_fixed_width() [io]
+    test.case("sixteen salt bytes are twenty-two characters")
+    test.assert_eq(bcryptmcf.b64_chars_for(16), bcryptmcf.BCRYPT_SALT_CHARS)
+    test.assert_eq(bcryptmcf.BCRYPT_SALT_CHARS, 22)
+
+    test.case("twenty-three hash bytes are thirty-one")
+    test.assert_eq(bcryptmcf.b64_chars_for(23), bcryptmcf.BCRYPT_HASH_CHARS)
+
+    test.case("an all-zero salt encodes to twenty-two of the first character")
+    test.assert_eq(str.len(bcryptmcf.b64_encode(bytes.zeros(16))), 22)
+
+    test.case("and decoding those gives the sixteen bytes back")
+    match bcryptmcf.b64_decode(str.repeat(".", 22))
+        Ok(raw) => test.assert_eq(bytes.len(raw), 16)
+        Err(e)  => test.fail(e.message())
+
+@test
+fn test_a_stored_string_parses_into_four_fields_and_renders_back() [io]
+    let stored = flat_hash()
+
+    test.case("sixty characters, and every field fixed-width")
+    test.assert_eq(str.len(stored), bcryptmcf.BCRYPT_MCF_CHARS)
+
+    match bcryptmcf.parse(stored)
+        Err(e) => test.fail(e.message())
+        Ok(h)  =>
+            test.case("the variant, the cost, the salt and the hash all come out")
+            test.assert_eq_str(bcryptvariant.prefix_text(bcryptmcf.variant_of(h)), "2b")
+            test.assert_eq(bcryptcost.value_of(bcryptmcf.cost_of(h)), 12)
+            test.assert_eq(bytes.len(bcryptinput.salt_bytes(bcryptmcf.salt_of(h))), 16)
+            test.assert_eq(bytes.len(bcryptmcf.digest_of(h)), 23)
+
+            test.case("and rendering gives back exactly the string that went in")
+            test.assert_eq_str(bcryptmcf.render(h), stored)
+
+@test
+fn test_a_malformed_string_names_the_field_it_stopped_in() [io]
+    // A row that will not parse should be findable in a database, not
+    // merely rejected.
+    test.case("a string of the wrong length is refused before anything is decoded")
+    match bcryptmcf.parse("\$2b\$12\$tooshort")
+        Ok(_)  => test.fail("the fields are fixed-width")
+        Err(e) => test.assert(bcrypterr.is_format_fault(e))
+
+    test.case("an unknown prefix names what it found")
+    match bcryptmcf.parse("\$2z\$12\$" + str.repeat(".", 53))
+        Ok(_)  => test.fail("2z is a hash this package cannot reproduce")
+        Err(e) => test.assert_eq_str(bcrypterr.code(e), "unknown-variant")
+
+    test.case("and a prefix that is not a variant at all is the same refusal")
+    match bcryptvariant.variant_of_text("2z")
+        Ok(_)  => test.fail("there is no arm meaning `whatever the string said`")
+        Err(e) => test.assert(bcrypterr.is_format_fault(e))
+
+@test
+fn test_a_hash_value_can_be_built_without_parsing_a_string() [io]
+    // What `bcrypthash.hash` builds before rendering, and what a test
+    // builds to check `render` against a known string.
+    match bcryptinput.salt(bytes.zeros(16))
+        Err(e) => test.fail(e.message())
+        Ok(sa) =>
+            match bcryptmcf.hash_value(Bcrypt2b, bcryptcost.default_cost(), sa,
+                                       bytes.zeros(23))
+                Err(e) => test.fail(e.message())
+                Ok(h)  =>
+                    test.case("it renders to the same sixty characters")
+                    test.assert_eq_str(bcryptmcf.render(h), flat_hash())
+
+    test.case("and a digest of the wrong length is refused")
+    match bcryptinput.salt(bytes.zeros(16))
+        Err(e) => test.fail(e.message())
+        Ok(sa) =>
+            match bcryptmcf.hash_value(Bcrypt2b, bcryptcost.default_cost(), sa,
+                                       bytes.zeros(24))
+                Ok(_)  => test.fail("the stored field carries 23 bytes, not 24")
+                Err(e) => test.assert(bcrypterr.is_input_fault(e)
+                                      or bcrypterr.is_format_fault(e))

@@ -1,0 +1,153 @@
+// tests/bcrypt_cover_tests.nv — the Blowfish primitive, and the rest
+// of the public surface, one case each.
+//
+// RED ON PURPOSE, like every suite here: each assertion reaches
+// `not implemented: bcrypt-nv.<module>.<fn>`.
+//
+// The two suites beside this one assert the DESIGN — the published
+// hashes, the two refusals, the format.  This one exists so that no
+// public function ships without a written expectation of what it
+// answers, and so that the cipher underneath can be bisected when the
+// hashes come out wrong.
+
+use std.test
+use std.bytes
+use bcryptblowfish
+use bcryptcost
+use bcrypthash
+use bcryptinput
+use bcryptmcf
+
+fn pw(text: Str) -> BcryptPassword
+    match bcryptinput.password(bytes.from_str(text))
+        Ok(p)  => p
+        Err(_) => BcryptPassword { text: bytes.zeros(0) }
+
+fn salt16() -> BcryptSalt
+    match bcryptinput.salt(bytes.zeros(16))
+        Ok(s)  => s
+        Err(_) => BcryptSalt { raw: bytes.zeros(16) }
+
+@test
+fn test_the_cipher_geometry_is_schneiers_own() [io]
+    test.case("eighteen subkeys, four S-boxes of 256, sixteen rounds")
+    test.assert_eq(bcryptblowfish.BLOWFISH_P_WORDS, 18)
+    test.assert_eq(bcryptblowfish.BLOWFISH_S_ENTRIES, 256)
+    test.assert_eq(bcryptblowfish.BLOWFISH_ROUNDS, 16)
+    test.assert_eq(bcryptblowfish.BLOWFISH_BLOCK_BYTES, 8)
+
+    test.case("and 18 subkeys of four bytes is where the 72-byte limit comes from")
+    test.assert_eq(bcryptblowfish.BCRYPT_PASSWORD_MAX_BYTES,
+                   bcryptblowfish.BLOWFISH_P_WORDS * 4)
+    test.assert_eq(bcryptblowfish.BCRYPT_SALT_BYTES, 16)
+
+@test
+fn test_the_tables_start_at_the_digits_of_pi() [io]
+    // These are constants of the cipher and not of the key, which is
+    // why they can be asserted: every Blowfish in the world starts
+    // here.
+    let st = bcryptblowfish.initial_state()
+
+    test.case("P[0] is the first 32 bits of the fractional part of pi")
+    test.assert_eq(bcryptblowfish.p_word(st, 0), 608135816)
+
+    test.case("an index outside the P-array answers 0 rather than trapping")
+    test.assert_eq(bcryptblowfish.p_word(st, 18), 0)
+
+    test.case("the S-boxes are readable, and so is their out-of-range answer")
+    test.assert(bcryptblowfish.s_word(st, 0, 0) != 0)
+    test.assert_eq(bcryptblowfish.s_word(st, 4, 0), 0)
+    test.assert_eq(bcryptblowfish.s_word(st, 0, 256), 0)
+
+@test
+fn test_the_feistel_network_can_be_bisected() [io]
+    let st = bcryptblowfish.initial_state()
+
+    test.case("a block is two halves and comes back as two halves")
+    let b = bcryptblowfish.block(0, 0)
+    test.assert_eq(b.l, 0)
+    test.assert_eq(b.r, 0)
+
+    test.case("F reads the S-boxes and is the one non-linear step")
+    test.assert(bcryptblowfish.feistel(st, 0) != 0)
+
+    test.case("encrypting the zero block under the initial tables changes it")
+    let out = bcryptblowfish.encrypt_block(st, b)
+    test.assert(out.l != 0 or out.r != 0)
+
+@test
+fn test_the_key_schedule_rewrites_the_tables() [io]
+    // What costs in bcrypt: 521 encryptions, each reading the tables
+    // the previous one rewrote.
+    let st = bcryptblowfish.initial_state()
+
+    test.case("expand_key moves P[0] away from pi")
+    let keyed = bcryptblowfish.expand_key(st, bytes.from_str("secret"))
+    test.assert(bcryptblowfish.p_word(keyed, 0) != bcryptblowfish.p_word(st, 0))
+
+    test.case("and the salted form gives a different schedule again")
+    let salted = bcryptblowfish.expand_key_salted(st, bytes.from_str("secret"),
+                                                  bytes.zeros(16))
+    test.assert(bcryptblowfish.p_word(salted, 0)
+                != bcryptblowfish.p_word(keyed, 0))
+
+@test
+fn test_the_eks_setup_cannot_fail_because_its_inputs_were_checked() [io]
+    // The point of the three value types: by the time the schedule
+    // runs there is nothing left to check, so there is no error
+    // channel for a reader to wonder about.
+    let st = bcryptblowfish.eks_setup(pw("correct horse"), salt16(),
+                                      bcryptcost.default_cost())
+
+    test.case("it answers a state, not a Result")
+    test.assert(bcryptblowfish.p_word(st, 0) != 0)
+
+    test.case("the same three inputs give the same schedule")
+    let again = bcryptblowfish.eks_setup(pw("correct horse"), salt16(),
+                                         bcryptcost.default_cost())
+    test.assert_eq(bcryptblowfish.p_word(st, 17),
+                   bcryptblowfish.p_word(again, 17))
+
+    test.case("and a different password gives a different one")
+    let other = bcryptblowfish.eks_setup(pw("wrong horse"), salt16(),
+                                         bcryptcost.default_cost())
+    test.assert(bcryptblowfish.p_word(st, 17) != bcryptblowfish.p_word(other, 17))
+
+@test
+fn test_hash_answers_a_value_and_hash_text_answers_the_string() [io]
+    test.case("hash gives the four fields")
+    match bcrypthash.hash(pw("x"), salt16(), bcryptcost.default_cost())
+        Err(e) => test.fail(e.message())
+        Ok(h)  =>
+            test.assert_eq(bcryptcost.value_of(bcryptmcf.cost_of(h)), 12)
+
+            test.case("and verify_against checks against that value without re-parsing")
+            match bcrypthash.verify_against(pw("x"), h)
+                Ok(ok) => test.assert(ok)
+                Err(e) => test.fail(e.message())
+
+            test.case("a hash at the floor does not need rehashing")
+            test.assert(not bcrypthash.needs_rehash(h, bcryptcost.default_cost()))
+
+@test
+fn test_a_stored_hash_below_the_floor_is_what_a_login_rehashes() [io]
+    match bcryptcost.cost(6)
+        Err(e)  => test.fail(e.message())
+        Ok(low) =>
+            match bcrypthash.hash(pw("x"), salt16(), low)
+                Err(e) => test.fail(e.message())
+                Ok(h)  =>
+                    test.case("cost 6 against a floor of 12 needs a rehash")
+                    test.assert(bcrypthash.needs_rehash(h, bcryptcost.default_cost()))
+
+@test
+fn test_a_password_value_hands_its_bytes_back() [io]
+    // So that a caller re-hashing at a higher cost does not have to
+    // hold the original string as well.
+    test.case("password_bytes is what went in")
+    test.assert_eq_str(bytes.to_str(bcryptinput.password_bytes(pw("hunter2"))),
+                       "hunter2")
+
+    test.case("and its length agrees with password_len")
+    test.assert_eq(bytes.len(bcryptinput.password_bytes(pw("hunter2"))),
+                   bcryptinput.password_len(pw("hunter2")))

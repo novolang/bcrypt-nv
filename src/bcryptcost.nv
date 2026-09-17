@@ -1,0 +1,166 @@
+// bcryptcost — the cost as a value that has already been checked.
+//
+// WHY A TYPE AND NOT AN `Int`.  The cost is the one number in bcrypt
+// that a caller chooses, and it is a security decision: it says how
+// many times the key schedule runs, which is what makes a guess
+// expensive.  An `Int` parameter can hold 3, or 0, or a column read
+// out of a configuration file that nobody validated, and a function
+// taking one has to decide at every call site what to do about it.
+// `BcryptCost` can only be made by a constructor that checked, so
+// every function below it takes a number that is in range and says so
+// in its type.
+//
+// WHAT THE NUMBER MEANS.  The key schedule runs `2^cost` times, so
+// each step up doubles the work.  A cost of 12 is 4096 iterations and
+// a cost of 13 is 8192.  That is the whole of the tuning story: pick
+// the largest number whose time your login endpoint can afford, and
+// raise it as machines get faster.
+//
+// WHY THE RANGE IS 4 TO 31.  OpenBSD's implementation admits exactly
+// that range, and every implementation that reads its format follows.
+// Below 4 the schedule is not run enough times to cost an attacker
+// anything; 31 is where `2^cost` stops fitting the arithmetic the
+// algorithm is defined over.
+
+// The smallest cost bcrypt admits.  A hash at this cost is cheap for
+// an attacker too; it is here because old stored hashes carry it.
+pub const BCRYPT_COST_MIN = 4
+
+// The largest cost bcrypt admits.
+pub const BCRYPT_COST_MAX = 31
+
+// The cost this package writes when a caller does not choose one.
+//
+// Twelve, which is 4096 iterations of the key schedule.  A number a
+// library picks is a number nobody revisits, so `bcryptcost.default`
+// is a named value a deployment can read, print and override rather
+// than a default argument it never sees.
+pub const BCRYPT_COST_DEFAULT = 12
+
+// A cost that has been checked against the range bcrypt admits.
+//
+// A plain struct rather than a `@value` one because it is a `Result`
+// payload — `cost` and `cost_of_text` both answer one — and a
+// `@value` struct cannot be one (E2015).  The field is readable so
+// the type stays reviewable; `rounds_of` is what a caller asking "how
+// much work is this" wants.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     match bcryptcost.cost(12)
+//         Ok(c)  => println("${bcryptcost.value_of(c)}")   // 12
+//         Err(e) => println(e.message())
+// ```
+pub struct BcryptCost
+    // The exponent, between 4 and 31.
+    log_rounds: Int
+
+// A cost, or the refusal that says why that number is not one.
+//
+// The only way to make a `BcryptCost`, which is what makes the type
+// worth having.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     match bcryptcost.cost(3)
+//         Ok(_)  => println("this cannot happen: 3 is below the minimum")
+//         Err(e) => println(bcrypterr.code(e))   // cost-out-of-range
+// ```
+pub fn cost(log_rounds: Int) -> Result<BcryptCost, BcryptError> []
+    todo("bcrypt-nv.bcryptcost.cost")
+
+// The cost this package writes when a caller does not choose one.
+//
+// Cannot fail, because the constant is in range by construction.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     println("${bcryptcost.value_of(bcryptcost.default_cost())}")   // 12
+// ```
+pub fn default_cost() -> BcryptCost []
+    todo("bcrypt-nv.bcryptcost.default_cost")
+
+// The exponent a cost holds: the number written into the
+// modular-crypt string.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     println("${bcryptcost.value_of(bcryptcost.default_cost())}")   // 12
+// ```
+pub fn value_of(c: BcryptCost) -> Int []
+    todo("bcrypt-nv.bcryptcost.value_of")
+
+// How many times the key schedule runs: `2^cost`.
+//
+// The number a deployment reasons about when it decides what a login
+// may cost.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     println("${bcryptcost.rounds_of(bcryptcost.default_cost())}")   // 4096
+// ```
+pub fn rounds_of(c: BcryptCost) -> Int []
+    todo("bcrypt-nv.bcryptcost.rounds_of")
+
+// The two decimal digits a cost is written as in the modular-crypt
+// string: `"04"` through `"31"`.
+//
+// Always two digits, zero-padded.  A single-digit cost is what a
+// hand-written formatter produces and what no other implementation
+// will read.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     println(bcryptcost.cost_text(bcryptcost.default_cost()))   // 12
+// ```
+pub fn cost_text(c: BcryptCost) -> Str []
+    todo("bcrypt-nv.bcryptcost.cost_text")
+
+// The cost those two digits denote, or the refusal.
+//
+// Exactly two digits: `"4"` is `BcryptMalformed`, because the field is
+// fixed-width and a parser that accepted one digit would read the
+// following salt character as part of the cost.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     match bcryptcost.cost_of_text("12")
+//         Ok(c)  => println("${bcryptcost.rounds_of(c)}")   // 4096
+//         Err(e) => println(e.message())
+// ```
+pub fn cost_of_text(text: Str) -> Result<BcryptCost, BcryptError> []
+    todo("bcrypt-nv.bcryptcost.cost_of_text")
+
+// Whether a cost is at least as expensive as another.
+//
+// What a deployment that is raising its cost asks about a hash it just
+// read, so that it can re-hash the password it has in hand at the new
+// cost.  That re-hash on login is the only way a stored hash's cost
+// ever goes up.
+//
+// ```novo
+// use bcryptcost
+//
+// fn main() [io]
+//     match bcryptcost.cost(10)
+//         Err(e) => println(e.message())
+//         Ok(old) =>
+//             println("${bcryptcost.at_least(old, bcryptcost.default_cost())}")
+//             // false — a cost of 10 is below the default of 12
+// ```
+pub fn at_least(c: BcryptCost, floor: BcryptCost) -> Bool []
+    todo("bcrypt-nv.bcryptcost.at_least")

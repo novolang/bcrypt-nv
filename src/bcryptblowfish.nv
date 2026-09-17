@@ -1,0 +1,221 @@
+// bcryptblowfish — Eksblowfish, the primitive bcrypt is made of.
+//
+// WHAT BLOWFISH IS.  A 64-bit block cipher from 1993, built out of an
+// 18-entry P-array and four S-boxes of 256 entries each, all 32 bits
+// wide.  Encryption is sixteen rounds of a Feistel network; the whole
+// cipher is a table lookup and an addition.  The tables are not
+// constants — they START at the digits of pi and are then rewritten by
+// the key schedule, which is what makes that schedule expensive and is
+// the reason bcrypt exists at all.
+//
+// WHAT THE `EKS` ADDS.  Provos and Mazieres' 1999 USENIX paper takes
+// Blowfish's key schedule and makes its cost a parameter.  `expand_key`
+// with a salt and a key is run once; then the key schedule is run
+// `2^cost` more times, alternating the key and the salt, with no
+// input and no output in between.  Nothing about the RESULT depends on
+// the cost except how long it took to get there, and that is the whole
+// design: an attacker guessing passwords pays the same `2^cost` per
+// guess that the server paid once.
+//
+// WHY THE STATE IS A VALUE.  1042 32-bit words — 18 P entries and
+// 1024 S-box entries — live in a `@value` struct, so the schedule runs
+// in the caller's own frame with no heap cell, no reference count and
+// nothing to free.  A password check allocates nothing.
+//
+// THIS MODULE MAKES NO DEVICE CLAIM, and the reason is the size rather
+// than the shape.  The state is 4 KiB and this package's functions
+// take one and answer another, so a Cortex-M4 running the schedule
+// would copy 4 KiB per step through a frame that is measured in
+// kilobytes.  The arithmetic is device-shaped; the working set is not.
+// A firmware author who needs a password hash on a microcontroller
+// wants a memory-light KDF, and that is what `pbkdf2-nv` is for.
+//
+// A WORD IS AN `Int` HOLDING 32 BITS.  Every function here keeps its
+// values in 0..2^32-1 and masks after every addition, the way
+// crypto-nv's `word` module does for the 32-bit hashes.
+
+// Entries in the P-array, which is the subkey schedule.
+pub const BLOWFISH_P_WORDS = 18
+
+// Entries in each of the four S-boxes.
+pub const BLOWFISH_S_ENTRIES = 256
+
+// Rounds in the Feistel network.
+pub const BLOWFISH_ROUNDS = 16
+
+// Bytes in one Blowfish block: 64 bits.
+pub const BLOWFISH_BLOCK_BYTES = 8
+
+// Bytes of salt the Eksblowfish schedule takes.  Fixed by the
+// algorithm: it is one 128-bit value fed to the schedule, not a length
+// the caller chooses.
+pub const BCRYPT_SALT_BYTES = 16
+
+// The most password bytes the key schedule reads.
+//
+// Seventy-two, because the schedule XORs the key over the 18-word
+// P-array — 18 times 4 — and stops.  A password longer than this
+// changes nothing about the result, which is the fact
+// `bcrypthash.hash` refuses rather than hides.
+pub const BCRYPT_PASSWORD_MAX_BYTES = 72
+
+// The Blowfish key schedule, as a value.
+//
+// A `@value` struct, so the 1042 words live in the caller's stack
+// frame with no header and no allocation.  The four S-boxes are four
+// fields rather than one long array because that is how every
+// description of the cipher, starting with Schneier's, numbers them,
+// and a reader checking `feistel` against the paper reads the same
+// subscripts.
+//
+// ```novo
+// use bcryptblowfish
+//
+// fn main() [io]
+//     let st = bcryptblowfish.initial_state()
+//     println("${bcryptblowfish.p_word(st, 0)}")
+//     // 608135816 — the first 32 bits of the fractional part of pi
+// ```
+pub @value
+struct BcryptState
+    // The subkeys, `P[0]` through `P[17]`.
+    p: [Int; 18]
+    // S-box 0.
+    s0: [Int; 256]
+    // S-box 1.
+    s1: [Int; 256]
+    // S-box 2.
+    s2: [Int; 256]
+    // S-box 3.
+    s3: [Int; 256]
+
+// One 64-bit block, as its two 32-bit halves.
+//
+// A `@value` struct rather than a pair, because a `@value` struct may
+// not be a tuple element (E2015) and because the halves are named `l`
+// and `r` in every description of the Feistel network.
+//
+// ```novo
+// use bcryptblowfish
+//
+// fn main() [io]
+//     let b = bcryptblowfish.block(0, 0)
+//     println("${b.l} ${b.r}")   // 0 0
+// ```
+pub @value
+struct BcryptBlock
+    // The left half.
+    l: Int
+    // The right half.
+    r: Int
+
+// The state before any key has touched it: the P-array and the four
+// S-boxes filled from the fractional part of pi.
+//
+// These are constants of the cipher and not of the key, which is why
+// they can be published: every Blowfish in the world starts here.
+//
+// ```novo
+// use bcryptblowfish
+//
+// fn main() [io]
+//     println("${bcryptblowfish.p_word(bcryptblowfish.initial_state(), 0)}")
+//     // 608135816
+// ```
+pub fn initial_state() -> BcryptState []
+    todo("bcrypt-nv.bcryptblowfish.initial_state")
+
+// A block from its two halves.
+pub fn block(l: Int, r: Int) -> BcryptBlock []
+    todo("bcrypt-nv.bcryptblowfish.block")
+
+// Subkey `i`, for `i` in `0 ..= 17`.  An index outside that range
+// answers 0.
+pub fn p_word(st: BcryptState, i: Int) -> Int []
+    todo("bcrypt-nv.bcryptblowfish.p_word")
+
+// Entry `i` of S-box `box_index`, for `box_index` in `0 ..= 3` and `i`
+// in `0 ..= 255`.  An index outside either range answers 0.
+//
+// The accessor a test uses to check the schedule against a published
+// intermediate state, and the one a reader checks `feistel` against.
+pub fn s_word(st: BcryptState, box_index: Int, i: Int) -> Int []
+    todo("bcrypt-nv.bcryptblowfish.s_word")
+
+// Blowfish's F function: split a word into four bytes, look each one
+// up in its own S-box, and combine them.
+//
+// `((S0[a] + S1[b]) XOR S2[c]) + S3[d]`, all modulo 2^32, where `a` is
+// the most significant byte.  The one non-linear step of the cipher,
+// and the only place the S-boxes are read.
+pub fn feistel(st: BcryptState, x: Int) -> Int []
+    todo("bcrypt-nv.bcryptblowfish.feistel")
+
+// Encrypt one block under the current schedule.
+//
+// Sixteen rounds, then the final swap and the two trailing subkeys.
+// bcrypt never decrypts, so there is no inverse here: the hash is
+// defined as an encryption repeated, and a decrypt would be a function
+// nothing in this package calls.
+//
+// ```novo
+// use bcryptblowfish
+//
+// fn main() [io]
+//     let out = bcryptblowfish.encrypt_block(bcryptblowfish.initial_state(),
+//                                            bcryptblowfish.block(0, 0))
+//     println("${out.l != 0}")   // true
+// ```
+pub fn encrypt_block(st: BcryptState, b: BcryptBlock) -> BcryptBlock []
+    todo("bcrypt-nv.bcryptblowfish.encrypt_block")
+
+// The standard Blowfish key schedule: XOR the key over the P-array,
+// then rewrite all 1042 words by encrypting a running block.
+//
+// This is what costs: 521 encryptions, each of which reads the tables
+// that the previous one rewrote.
+pub fn expand_key(st: BcryptState, key: Bytes) -> BcryptState []
+    todo("bcrypt-nv.bcryptblowfish.expand_key")
+
+// The `expensive` key schedule of the USENIX paper: the same
+// rewriting, with the salt XORed into the running block.
+//
+// Run once with the key and the salt to start, and then `2^cost` times
+// more with each of them in turn and a zero salt, which is what
+// `eks_setup` does.
+pub fn expand_key_salted(st: BcryptState, key: Bytes, salt: Bytes) -> BcryptState []
+    todo("bcrypt-nv.bcryptblowfish.expand_key_salted")
+
+// The whole Eksblowfish setup: `expand_key_salted` once, then
+// `2^cost` alternations of the key and the salt.
+//
+// The result depends on the key, the salt and nothing else; the cost
+// decides only how long it took.
+//
+// IT CANNOT FAIL, and that is the point of the three value types it
+// takes.  A password over 72 bytes, a password with a zero byte in it
+// and a salt that is not sixteen bytes are all refused by
+// `bcryptinput`, and a cost outside 4 to 31 by `bcryptcost`, at the
+// line where the bad value came in.  By the time the schedule runs
+// there is nothing left to check, so there is no error channel here
+// for a reader to wonder about.
+//
+// ```novo
+// use std.bytes
+// use bcryptblowfish
+// use bcryptcost
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("secret"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcryptinput.salt(bytes.zeros(16))
+//                 Err(e) => println(e.message())
+//                 Ok(sa) =>
+//                     let st = bcryptblowfish.eks_setup(pw, sa,
+//                                  bcryptcost.default_cost())
+//                     println("${bcryptblowfish.p_word(st, 0) != 0}")
+// ```
+pub fn eks_setup(key: BcryptPassword, salt: BcryptSalt, cost: BcryptCost) -> BcryptState []
+    todo("bcrypt-nv.bcryptblowfish.eks_setup")

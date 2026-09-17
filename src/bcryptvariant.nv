@@ -1,0 +1,143 @@
+// bcryptvariant — the prefixes between the two dollar signs, and what
+// each of them is a record of.
+//
+// bcrypt's version field does not mean "version 1, version 2".  Each
+// letter is a marker somebody added when an implementation was found
+// to be computing something different from what it meant to, and the
+// marker exists so that hashes made before the discovery can still be
+// verified.  A caller that reads a stored hash has to honour the
+// marker it finds; a caller writing a new hash should write one
+// letter and only one.
+//
+// | prefix | what it records |
+// | --- | --- |
+// | `2` | The original, from the 1999 USENIX paper.  No length field on the key. |
+// | `2a` | The corrected original, and what most of the world wrote for fifteen years. |
+// | `2x` | `2a` hashes made by the PHP implementation that sign-extended bytes above 127.  Reading only. |
+// | `2y` | The PHP marker for hashes made after that was fixed.  Computes exactly what `2b` computes. |
+// | `2b` | OpenBSD's marker after the 255-byte key-length overflow was fixed in 2014.  What this package writes. |
+//
+// `2x` AND `2y` ARE ABOUT ONE BUG.  PHP's `crypt` treated the password
+// bytes as signed characters, so a byte above 127 was sign-extended
+// and a password with an accented letter in it hashed to something no
+// other implementation computed.  When it was fixed, hashes already in
+// databases could not be recomputed, so the broken behaviour was given
+// the name `2x` and kept, and the fixed one was given `2y`.
+//
+// `2b` IS ABOUT A DIFFERENT ONE.  OpenBSD's own code stored the key
+// length in an unsigned char, so a password of 256 bytes or more
+// wrapped to a short one.  A password that long is already past
+// bcrypt's 72-byte limit, so the practical effect was small, and the
+// marker was still added because a hash has to say what computed it.
+//
+// THERE IS NO ARM MEANING "WHATEVER THE STRING SAID".  A parse either
+// produces one of these five or refuses with
+// `BcryptUnknownVariant`, so no value in this package means "some
+// prefix I did not recognise" and no function has to decide what to do
+// about one.
+
+// Which prefix a hash carries.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     println(bcryptvariant.prefix_text(Bcrypt2b))   // 2b
+// ```
+pub enum BcryptVariant
+    // `$2$`: the original from the USENIX paper.  Read only; almost
+    // nothing in the world still carries it.
+    Bcrypt2
+    // `$2a$`: the corrected original, and the prefix most stored
+    // hashes carry.
+    Bcrypt2a
+    // `$2x$`: PHP's sign-extended bytes, kept so those hashes can
+    // still be verified.  This package will never write one.
+    Bcrypt2x
+    // `$2y$`: PHP's marker after that was fixed.  Computes what
+    // `Bcrypt2b` computes.
+    Bcrypt2y
+    // `$2b$`: OpenBSD's marker after the key-length overflow was
+    // fixed, and the one this package writes.
+    Bcrypt2b
+
+// The prefix this package writes for a new hash: `Bcrypt2b`.
+//
+// A named function rather than a default argument, so that a
+// deployment can print what it is about to write.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     println(bcryptvariant.prefix_text(bcryptvariant.written_variant()))   // 2b
+// ```
+pub fn written_variant() -> BcryptVariant []
+    todo("bcrypt-nv.bcryptvariant.written_variant")
+
+// The text between the two dollar signs: `"2"`, `"2a"`, `"2x"`,
+// `"2y"`, `"2b"`.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     println(bcryptvariant.prefix_text(Bcrypt2a))   // 2a
+// ```
+pub fn prefix_text(v: BcryptVariant) -> Str []
+    todo("bcrypt-nv.bcryptvariant.prefix_text")
+
+// The variant that text denotes, or the refusal naming what was
+// found.
+//
+// Exactly the five spellings above.  `"2z"` is
+// `BcryptUnknownVariant("2z")` rather than a guess, because a prefix
+// nobody has defined is a hash this package cannot reproduce.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     match bcryptvariant.variant_of_text("2z")
+//         Ok(_)  => println("this cannot happen: 2z is not a variant")
+//         Err(e) => println(bcrypterr.code(e))   // unknown-variant
+// ```
+pub fn variant_of_text(text: Str) -> Result<BcryptVariant, BcryptError> []
+    todo("bcrypt-nv.bcryptvariant.variant_of_text")
+
+// Whether two variants compute the same hash for the same inputs.
+//
+// `Bcrypt2a`, `Bcrypt2y` and `Bcrypt2b` all do, for every password
+// whose bytes are below 128 and whose length is under 256 — which is
+// every password this package will accept, because it refuses one over
+// 72 bytes.  `Bcrypt2x` does not, and `Bcrypt2` does not for a long
+// key.
+//
+// A verifier uses this to decide whether a stored `$2a$` hash can be
+// checked by computing a `$2b$` one, which is what makes a database
+// full of old prefixes verifiable without five code paths.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     println("${bcryptvariant.computes_alike(Bcrypt2a, Bcrypt2b)}")   // true
+//     println("${bcryptvariant.computes_alike(Bcrypt2x, Bcrypt2b)}")   // false
+// ```
+pub fn computes_alike(a: BcryptVariant, b: BcryptVariant) -> Bool []
+    todo("bcrypt-nv.bcryptvariant.computes_alike")
+
+// Whether this package will produce a hash under that variant.
+//
+// True for `Bcrypt2b` alone.  Every variant can be VERIFIED; only one
+// is written, because writing a marker that records somebody else's
+// bug would be recording a bug this package does not have.
+//
+// ```novo
+// use bcryptvariant
+//
+// fn main() [io]
+//     println("${bcryptvariant.is_writable(Bcrypt2x)}")   // false
+// ```
+pub fn is_writable(v: BcryptVariant) -> Bool []
+    todo("bcrypt-nv.bcryptvariant.is_writable")

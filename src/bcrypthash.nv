@@ -1,0 +1,240 @@
+// bcrypthash — hashing a password, and checking one.
+//
+// WHAT BCRYPT COMPUTES.  Set up Eksblowfish from the password, the
+// salt and the cost, then encrypt the 24-byte ASCII string
+// `OrpheanBeholderScryDoubt` sixty-four times with the resulting
+// cipher.  The 24 bytes that come out are the hash, and the stored
+// string carries the first 23 of them.  That is the whole algorithm;
+// everything expensive happened in the key schedule.
+//
+// THE SALT IS A PARAMETER, AND THAT IS WHY THIS PACKAGE IS `core`.
+// Generating a salt means reading randomness, which is `[rand]`, and
+// a `core` package's budget is no effects at all.  So the salt arrives
+// as an argument the caller produced — from `rand-nv`, from a `host`
+// package on top of this one, or from a stored hash that already has
+// one.
+//
+// That is not an obstacle worked around.  It makes hashing a PURE
+// FUNCTION of its three inputs, which has three consequences worth
+// having: a test reproduces a published vector exactly, with no
+// injected generator; the `[rand]` a program spends is visible at the
+// one line that spends it, rather than hidden inside a library; and
+// verifying — which uses the salt out of the stored string and needs
+// no randomness at all — is the same function as hashing rather than a
+// second code path.
+//
+// A `host` PACKAGE IS WHERE THE GENERATOR GOES.  `bcrypt_hash_new` is
+// deliberately absent.  A caller writes
+//
+//     let salt = rand.bytes(16)              // [rand], in the caller
+//     bcrypthash.hash(password, salt, cost)  // [], here
+//
+// and the effect row of each line says which is which.
+
+use std.bytes
+
+// The string bcrypt encrypts: 24 bytes of ASCII, three Blowfish
+// blocks.
+//
+// From the 1999 USENIX paper.  It has no meaning; it is a constant
+// plaintext, and its only property that matters is that it is exactly
+// three blocks long.
+pub const BCRYPT_MAGIC = "OrpheanBeholderScryDoubt"
+
+// How many times the magic string is encrypted: 64.
+pub const BCRYPT_MAGIC_ROUNDS = 64
+
+// Bytes the encryption produces: 24.  The stored string carries 23 of
+// them; see `bcryptmcf`.
+pub const BCRYPT_RAW_HASH_BYTES = 24
+
+// Hash a password with a salt and a cost, and answer the value a
+// stored string is rendered from.
+//
+// The three inputs are already-checked values, so the only refusal
+// left is one that cannot happen for a well-formed call; the `Result`
+// is here because `BcryptHash` is built through
+// `bcryptmcf.hash_value`, which has one.
+//
+// ```novo
+// use std.bytes
+// use bcryptcost
+// use bcrypthash
+// use bcryptinput
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("correct horse"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcryptinput.salt(bytes.zeros(16))
+//                 Err(e) => println(e.message())
+//                 Ok(sa) =>
+//                     match bcrypthash.hash(pw, sa, bcryptcost.default_cost())
+//                         Ok(h)  => println("${str.len(bcryptmcf.render(h))}")   // 60
+//                         Err(e) => println(e.message())
+// ```
+pub fn hash(password: BcryptPassword, salt: BcryptSalt,
+            cost: BcryptCost) -> Result<BcryptHash, BcryptError> []
+    todo("bcrypt-nv.bcrypthash.hash")
+
+// Hash a password and answer the sixty characters to store.
+//
+// `hash` followed by `bcryptmcf.render`, which is what a caller
+// writing a row wants and saves it holding a value it will not look
+// at.  Writes the variant `bcryptvariant.written_variant` names.
+//
+// ```novo
+// use std.bytes
+// use bcryptcost
+// use bcrypthash
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("correct horse"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcryptinput.salt(bytes.zeros(16))
+//                 Err(e) => println(e.message())
+//                 Ok(sa) =>
+//                     match bcrypthash.hash_text(pw, sa, bcryptcost.default_cost())
+//                         Ok(s)  => println("${str.starts_with(s, "$2b$12$")}")
+//                         Err(e) => println(e.message())
+// ```
+pub fn hash_text(password: BcryptPassword, salt: BcryptSalt,
+                 cost: BcryptCost) -> Result<Str, BcryptError> []
+    todo("bcrypt-nv.bcrypthash.hash_text")
+
+// Hash a password under a named variant.
+//
+// Refuses every variant but `Bcrypt2b` with `BcryptUnknownVariant`,
+// because writing a marker that records somebody else's bug would be
+// recording a bug this package does not have.  It exists so that a
+// caller migrating a database can say which variant it meant and be
+// told, rather than discovering later that every row it wrote says
+// `2b` when it wanted `2y`.
+//
+// ```novo
+// use std.bytes
+// use bcryptcost
+// use bcrypthash
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("x"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcryptinput.salt(bytes.zeros(16))
+//                 Err(e) => println(e.message())
+//                 Ok(sa) =>
+//                     match bcrypthash.hash_as(Bcrypt2x, pw, sa,
+//                                              bcryptcost.default_cost())
+//                         Ok(_)  => println("this cannot happen: 2x is not written")
+//                         Err(e) => println(bcrypterr.code(e))   // unknown-variant
+// ```
+pub fn hash_as(v: BcryptVariant, password: BcryptPassword, salt: BcryptSalt,
+               cost: BcryptCost) -> Result<BcryptHash, BcryptError> []
+    todo("bcrypt-nv.bcrypthash.hash_as")
+
+// The twenty-four bytes the encryption produces, before the last one
+// is dropped.
+//
+// Published because it is the value a port is bisected against: a hash
+// that is right here and wrong in the stored string is a base64
+// problem, and one that is wrong here is a key-schedule problem.
+//
+// ```novo
+// use std.bytes
+// use bcryptcost
+// use bcrypthash
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("x"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcryptinput.salt(bytes.zeros(16))
+//                 Err(e) => println(e.message())
+//                 Ok(sa) =>
+//                     let raw = bcrypthash.raw_hash(pw, sa, bcryptcost.default_cost())
+//                     println("${bytes.len(raw)}")   // 24
+// ```
+pub fn raw_hash(password: BcryptPassword, salt: BcryptSalt, cost: BcryptCost) -> Bytes []
+    todo("bcrypt-nv.bcrypthash.raw_hash")
+
+// Check a password against a stored string.
+//
+// Parses the string, hashes the password with the salt and cost it
+// carries, and compares the twenty-three bytes IN CONSTANT TIME.  A
+// stored string that does not parse is a refusal and not a `false`,
+// because a row that is not a bcrypt hash is a different problem from
+// a password that is wrong, and a login endpoint that conflated them
+// would report a database fault as a bad password.
+//
+// Verifies every variant, including `Bcrypt2x`, whose stored hashes
+// can only be checked by reproducing the behaviour they record.
+//
+// ```novo
+// use std.bytes
+// use bcrypthash
+// use bcryptinput
+//
+// fn main() [io]
+//     match bcryptinput.password(bytes.from_str("correct horse"))
+//         Err(e) => println(e.message())
+//         Ok(pw) =>
+//             match bcrypthash.verify(pw, "$2b$12$" + str.repeat(".", 53))
+//                 Ok(ok) => println("${ok}")
+//                 Err(e) => println(e.message())
+// ```
+pub fn verify(password: BcryptPassword, stored: Str) -> Result<Bool, BcryptError> []
+    todo("bcrypt-nv.bcrypthash.verify")
+
+// Check a password against an already-parsed hash.
+//
+// The same comparison as `verify` without re-parsing, for a caller
+// that read the cost out of the stored string first — which is what a
+// deployment raising its cost does on every login.
+//
+// ```novo
+// use std.bytes
+// use bcrypthash
+// use bcryptinput
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptmcf.parse("$2b$12$" + str.repeat(".", 53))
+//         Err(e) => println(e.message())
+//         Ok(h)  =>
+//             match bcryptinput.password(bytes.from_str("x"))
+//                 Err(e) => println(e.message())
+//                 Ok(pw) =>
+//                     match bcrypthash.verify_against(pw, h)
+//                         Ok(ok) => println("${ok}")
+//                         Err(e) => println(e.message())
+// ```
+pub fn verify_against(password: BcryptPassword, h: BcryptHash) -> Result<Bool, BcryptError> []
+    todo("bcrypt-nv.bcrypthash.verify_against")
+
+// Whether a stored hash should be replaced because its cost is below
+// a floor.
+//
+// The question a login endpoint asks after a successful verify, and
+// the only moment at which a stored hash's cost can be raised: the
+// password is in hand exactly once, and re-hashing it then is how a
+// database moves from cost 10 to cost 12 without asking anybody to
+// change anything.
+//
+// ```novo
+// use bcryptcost
+// use bcrypthash
+// use bcryptmcf
+//
+// fn main() [io]
+//     match bcryptmcf.parse("$2b$12$" + str.repeat(".", 53))
+//         Err(e) => println(e.message())
+//         Ok(h)  => println("${bcrypthash.needs_rehash(h, bcryptcost.default_cost())}")
+//         // false — the stored cost is already 12
+// ```
+pub fn needs_rehash(h: BcryptHash, floor: BcryptCost) -> Bool []
+    todo("bcrypt-nv.bcrypthash.needs_rehash")
